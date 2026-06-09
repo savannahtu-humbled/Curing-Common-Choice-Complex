@@ -1050,15 +1050,27 @@
         import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // ==========================================
-        // Firebase 初始化 (遵守 RULE 1, 2, 3)
+        // 智慧環境偵測：確保在 GitHub 上不會崩潰且能流暢運行
         // ==========================================
-        const firebaseConfig = JSON.parse(__firebase_config);
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-
+        let db = null;
+        let auth = null;
+        let appId = 'default-app-id';
+        let useFirebase = false;
         let user = null;
+
+        // 偵測是否處於 Gemini Canvas 特殊雲端環境
+        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+            try {
+                const firebaseConfig = JSON.parse(__firebase_config);
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+                useFirebase = true;
+            } catch (err) {
+                console.warn("Firebase 初始化失敗，將無縫啟用瀏覽器本地存儲 (localStorage) 模式。");
+            }
+        }
 
         // 綁定基本全域變數以支援 HTML onclick 切換
         window.switchTab = switchTab;
@@ -1170,7 +1182,7 @@
             options.splice(index, 1);
             renderTags();
             drawWheel();
-            saveWheelToFirestore();
+            saveWheelData();
         }
 
         function addOption() {
@@ -1185,7 +1197,7 @@
                 renderTags();
                 drawWheel();
                 tagsBox.scrollTop = tagsBox.scrollHeight;
-                saveWheelToFirestore();
+                saveWheelData();
             }
         }
 
@@ -1199,7 +1211,7 @@
             const val = wheelTitleInput.value.trim();
             wheelTitle = val ? val : "今天吃什麼？";
             wheelCurrentTitle.innerHTML = `<i class="fa-solid fa-bowl-food"></i> ${wheelTitle}`;
-            saveWheelToFirestore();
+            saveWheelData();
         });
 
         function drawWheel() {
@@ -1321,7 +1333,7 @@
             }, 70);
         });
 
-        // 亂數分組邏輯（確認可用性與優化）
+        // 亂數分組邏輯
         const groupMin = document.getElementById('group-min');
         const groupMax = document.getElementById('group-max');
         const groupCountInput = document.getElementById('group-count');
@@ -1656,7 +1668,7 @@
                 conInput.value = '';
             }
             renderFranklin();
-            saveFranklinToFirestore();
+            saveFranklinData();
         }
 
         addProBtn.addEventListener('click', () => addReason('pro'));
@@ -1672,7 +1684,7 @@
                 franklinData.cons = franklinData.cons.filter(item => item.id !== id);
             }
             renderFranklin();
-            saveFranklinToFirestore();
+            saveFranklinData();
         }
 
         function toggleReasonCrossed(id, type) {
@@ -1684,12 +1696,12 @@
                 if (item) item.crossed = !item.crossed;
             }
             renderFranklin();
-            saveFranklinToFirestore();
+            saveFranklinData();
         }
 
         questionInput.addEventListener('input', () => {
             franklinData.question = questionInput.value;
-            saveFranklinToFirestore();
+            saveFranklinData();
         });
 
         // 「我決定了！」智慧推薦決策邏輯
@@ -1723,102 +1735,136 @@
         clearFranklinBtn.addEventListener('click', () => {
             franklinData = { question: "", pros: [], cons: [] };
             renderFranklin();
-            saveFranklinToFirestore();
+            saveFranklinData();
         });
 
 
         // ==========================================
-        // 雲端資料庫儲存與載入邏輯 (遵照三大鐵則)
+        // 智慧型資料儲存與載入邏輯（支援雲端 + 瀏覽器本機 localStorage）
         // ==========================================
         
-        // 1. 儲存轉盤設定 (含自訂主題標題)
-        async function saveWheelToFirestore() {
-            if (!user) return;
-            try {
-                const wheelDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'wheel', 'data');
-                await setDoc(wheelDocRef, { options, title: wheelTitle });
-            } catch (err) {
-                // 靜默
+        // 1. 儲存轉盤設定
+        async function saveWheelData() {
+            if (useFirebase && user) {
+                try {
+                    const wheelDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'wheel', 'data');
+                    await setDoc(wheelDocRef, { options, title: wheelTitle });
+                } catch (err) {}
+            } else {
+                localStorage.setItem('wheel_options', JSON.stringify(options));
+                localStorage.setItem('wheel_title', wheelTitle);
             }
         }
 
-        // 2. 儲存富蘭克林決策
-        async function saveFranklinToFirestore() {
-            if (!user) return;
-            try {
-                const franklinDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'franklin', 'data');
-                await setDoc(franklinDocRef, franklinData);
-            } catch (err) {
-                // 靜默
+        // 2. 儲存富蘭克林決策資料
+        async function saveFranklinData() {
+            if (useFirebase && user) {
+                try {
+                    const franklinDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'franklin', 'data');
+                    await setDoc(franklinDocRef, franklinData);
+                } catch (err) {}
+            } else {
+                localStorage.setItem('franklin_data', JSON.stringify(franklinData));
             }
         }
 
         // 3. 載入轉盤設定
         async function loadWheelOptions() {
-            if (!user) return;
-            try {
-                const wheelDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'wheel', 'data');
-                const docSnap = await getDoc(wheelDocRef);
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
-                    if (data.options) options = data.options;
-                    if (data.title) {
-                        wheelTitle = data.title;
-                        wheelTitleInput.value = wheelTitle;
-                        wheelCurrentTitle.innerHTML = `<i class="fa-solid fa-bowl-food"></i> ${wheelTitle}`;
+            if (useFirebase && user) {
+                try {
+                    const wheelDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'wheel', 'data');
+                    const docSnap = await getDoc(wheelDocRef);
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        if (data.options) options = data.options;
+                        if (data.title) {
+                            wheelTitle = data.title;
+                            wheelTitleInput.value = wheelTitle;
+                            wheelCurrentTitle.innerHTML = `<i class="fa-solid fa-bowl-food"></i> ${wheelTitle}`;
+                        }
+                        initWheel();
+                        return;
                     }
-                    initWheel();
-                }
-            } catch (err) {
-                // 降級
+                } catch (err) {}
             }
+            
+            // 本地 fallback 載入
+            const localOptions = localStorage.getItem('wheel_options');
+            const localTitle = localStorage.getItem('wheel_title');
+            if (localOptions) options = JSON.parse(localOptions);
+            if (localTitle) {
+                wheelTitle = localTitle;
+                wheelTitleInput.value = wheelTitle;
+                wheelCurrentTitle.innerHTML = `<i class="fa-solid fa-bowl-food"></i> ${wheelTitle}`;
+            }
+            initWheel();
         }
 
-        // 4. 載入富蘭克林決策
+        // 4. 載入富蘭克林決策資料
         async function loadFranklinMatrix() {
-            if (!user) return;
-            try {
-                const franklinDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'franklin', 'data');
-                const docSnap = await getDoc(franklinDocRef);
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
-                    franklinData.question = data.question || "";
-                    franklinData.pros = data.pros || [];
-                    franklinData.cons = data.cons || [];
-                    renderFranklin();
-                }
-            } catch (err) {
-                // 降級
+            if (useFirebase && user) {
+                try {
+                    const franklinDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'franklin', 'data');
+                    const docSnap = await getDoc(franklinDocRef);
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        franklinData.question = data.question || "";
+                        franklinData.pros = data.pros || [];
+                        franklinData.cons = data.cons || [];
+                        renderFranklin();
+                        return;
+                    }
+                } catch (err) {}
             }
+            
+            // 本地 fallback 載入
+            const localFranklin = localStorage.getItem('franklin_data');
+            if (localFranklin) {
+                const data = JSON.parse(localFranklin);
+                franklinData.question = data.question || "";
+                franklinData.pros = data.pros || [];
+                franklinData.cons = data.cons || [];
+            }
+            renderFranklin();
         }
 
         // ==========================================
         // 初始化載入與身份認證 (遵守 RULE 3)
         // ==========================================
-        onAuthStateChanged(auth, (u) => {
-            user = u;
-            if (user) {
-                loadWheelOptions();
-                loadFranklinMatrix();
-            }
-        });
-
-        const initAuth = async () => {
-            try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
+        if (useFirebase) {
+            onAuthStateChanged(auth, (u) => {
+                user = u;
+                if (user) {
+                    loadWheelOptions();
+                    loadFranklinMatrix();
                 }
-            } catch (err) {
-                // 降級
-            }
-        };
+            });
+
+            const initAuth = async () => {
+                try {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch (err) {
+                    useFirebase = false; // 登入出錯則降級為本地 localStorage
+                    loadWheelOptions();
+                    loadFranklinMatrix();
+                }
+            };
+            initAuth();
+        } else {
+            // 在 GitHub Pages/本機環境中，不登入 Firebase，直接讀取 localStorage 資料
+            loadWheelOptions();
+            loadFranklinMatrix();
+        }
 
         window.onload = () => {
-            initAuth();
-            initWheel();
-            renderFranklin();
+            if (!useFirebase) {
+                initWheel();
+                renderFranklin();
+            }
         };
     </script>
 </body>
